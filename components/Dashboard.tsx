@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { IPOData, IPOStatus } from '../types';
 import { fetchIPOData } from '../services/geminiService';
@@ -93,24 +93,60 @@ const Dashboard: React.FC = () => {
     return data;
   }, [ipoData, activeTab, closedFilter]);
 
-  // Show skeleton during initial load OR manual refresh
   const showSkeleton = isLoading || isRefetching;
 
-  // Helper to calculate total subscription safely
-  const getTotalSub = (sub: IPOData['subscription']) => {
-    const r = parseFloat(sub.retail.replace('x', '')) || 0;
-    const n = parseFloat(sub.nii.replace('x', '')) || 0;
-    const q = parseFloat(sub.qib.replace('x', '')) || 0;
-    return (r + n + q).toFixed(1) + 'x';
+  // --- SAFETY HELPERS (FIX FOR ERROR #31) ---
+
+  // 1. Universal Safe Render: Converts ANY type (Object, Array, Null) to String
+  // This prevents the app from crashing if API returns { value: 10 } instead of "10"
+  const safeRender = (val: any): string => {
+    if (val === null || val === undefined) return '';
+    if (typeof val === 'object') {
+      try {
+        return JSON.stringify(val);
+      } catch {
+        return '';
+      }
+    }
+    return String(val);
   };
 
+  // 2. Robust Subscription Calculator
+  const getTotalSub = (sub: any): string => {
+    if (!sub || typeof sub !== 'object') return 'N/A';
+    
+    const clean = (val: any) => {
+        if (typeof val === 'number') return val;
+        if (typeof val !== 'string') return 0;
+        // Remove 'x', commas, spaces
+        const parsed = parseFloat(val.replace(/[x,\s]/gi, ''));
+        return isNaN(parsed) ? 0 : parsed;
+    };
+
+    try {
+        const total = clean(sub.retail) + clean(sub.nii) + clean(sub.qib);
+        // Return with 1 decimal place and 'x' suffix
+        return total.toFixed(1) + 'x';
+    } catch (e) {
+        return 'N/A';
+    }
+  };
+
+  // --- ERROR UI BLOCK (FIX FOR ERROR #31) ---
   if (isError && !ipoData.length) {
+    // Extract error message safely as a string
+    let errorMessage = "An unexpected error occurred.";
+    if (error) {
+       // Force conversion to string to avoid Object-as-child error
+       errorMessage = (error as any)?.message || String(error);
+    }
+
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] text-center space-y-4 animate-fadeIn">
         <AlertCircle size={48} className="text-red-500" />
         <h3 className="text-xl font-bold text-gray-900 dark:text-white">Failed to load market data</h3>
-        <p className="text-gray-500 dark:text-gray-400 max-w-md">
-          {error instanceof Error ? error.message : "An unexpected error occurred while connecting to the data service."}
+        <p className="text-gray-500 dark:text-gray-400 max-w-md break-words">
+          {errorMessage}
         </p>
         <button 
           onClick={() => refetch()} 
@@ -184,31 +220,28 @@ const Dashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Grid Container with Vertical Scroll */}
+      {/* Grid Container */}
       <div className={`
         ${filteredData.length > 5 && !showSkeleton ? 'max-h-[75vh] overflow-y-auto pr-2 custom-scrollbar' : ''}
         grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-4
       `}>
         
         {showSkeleton ? (
-          // Skeleton Loading State
           <>
             {[1, 2, 3, 4, 5, 6].map((i) => (
               <SkeletonCard key={i} />
             ))}
           </>
         ) : filteredData.length === 0 ? (
-          // Empty State
           <div className="col-span-full text-center py-20 bg-white dark:bg-charcoal-light rounded-3xl border border-dashed border-gray-200 dark:border-gray-800">
             <p className="text-xl text-gray-500 dark:text-gray-400 font-medium">No {activeTab} {closedFilter !== 'All' ? closedFilter : ''} IPOs found currently.</p>
             <p className="text-sm text-gray-400 mt-2">Check back later or try refreshing.</p>
           </div>
         ) : (
-          // Data Cards
           filteredData.map((ipo) => {
-            // Logic for Listing Gain Color
             const isClosed = ipo.status === 'Closed';
-            const listingGainVal = parseFloat(ipo.listingGain?.replace('%', '') || '0');
+            const listingGainStr = safeRender(ipo?.listingGain);
+            const listingGainVal = parseFloat(listingGainStr.replace('%', '')) || 0;
             const isProfit = listingGainVal >= 0;
 
             return (
@@ -224,11 +257,11 @@ const Dashboard: React.FC = () => {
                       ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300' 
                       : 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
                   }`}>
-                    {ipo.type}
+                    {safeRender(ipo?.type)}
                   </span>
                   {!isClosed && (
                     <span className="px-3 py-1 text-xs font-bold rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 flex items-center gap-1">
-                      GMP: {ipo.gmp}
+                      GMP: {safeRender(ipo?.gmp)}
                     </span>
                   )}
                   {isClosed && (
@@ -237,13 +270,13 @@ const Dashboard: React.FC = () => {
                         ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' 
                         : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                     }`}>
-                      Gain: {ipo.listingGain || 'N/A'}
+                      Gain: {safeRender(ipo?.listingGain || 'N/A')}
                     </span>
                   )}
                 </div>
 
-                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4 pr-24 truncate" title={ipo.companyName}>
-                  {ipo.companyName}
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-4 pr-24 truncate" title={String(ipo?.companyName)}>
+                  {safeRender(ipo?.companyName || "Unknown Company")}
                 </h3>
 
                 <div className="space-y-3 flex-grow">
@@ -251,14 +284,14 @@ const Dashboard: React.FC = () => {
                     <span className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
                       <BadgeIndianRupee size={16} /> Price Band
                     </span>
-                    <span className="font-semibold text-gray-800 dark:text-gray-200">{ipo.priceBand}</span>
+                    <span className="font-semibold text-gray-800 dark:text-gray-200">{safeRender(ipo?.priceBand)}</span>
                   </div>
                   
                   <div className="flex justify-between items-center text-sm">
                     <span className="text-gray-500 dark:text-gray-400 flex items-center gap-2">
                       <Layers size={16} /> Lot Size
                     </span>
-                    <span className="font-semibold text-gray-800 dark:text-gray-200">{ipo.lotSize} Shares</span>
+                    <span className="font-semibold text-gray-800 dark:text-gray-200">{safeRender(ipo?.lotSize)} Shares</span>
                   </div>
 
                    <div className="flex justify-between items-center text-sm">
@@ -266,7 +299,10 @@ const Dashboard: React.FC = () => {
                       <Calendar size={16} /> {isClosed ? 'Listed On' : 'Issue Dates'}
                     </span>
                     <span className="font-semibold text-gray-800 dark:text-gray-200 text-xs text-right">
-                      {isClosed ? ipo.listingDate : `${ipo.openDate} - ${ipo.closeDate}`}
+                      {isClosed 
+                        ? safeRender(ipo?.listingDate) 
+                        : `${safeRender(ipo?.openDate)} - ${safeRender(ipo?.closeDate)}`
+                      }
                     </span>
                   </div>
                 </div>
@@ -279,7 +315,9 @@ const Dashboard: React.FC = () => {
                           <Users size={16} />
                           <span className="text-sm font-medium">Total Subs</span>
                         </div>
-                        <span className="text-lg font-bold text-gray-900 dark:text-white">{getTotalSub(ipo.subscription)}</span>
+                        <span className="text-lg font-bold text-gray-900 dark:text-white">
+                          {getTotalSub(ipo?.subscription)}
+                        </span>
                      </div>
                   </div>
                 ) : (
@@ -289,7 +327,9 @@ const Dashboard: React.FC = () => {
                          <TrendingUp size={18} />
                          <span className="text-sm font-bold">Est. Gain</span>
                        </div>
-                       <span className="text-lg font-extrabold text-green-600 dark:text-green-400">{ipo.expectedGain}</span>
+                       <span className="text-lg font-extrabold text-green-600 dark:text-green-400">
+                         {safeRender(ipo?.expectedGain)}
+                       </span>
                     </div>
                   </div>
                 )}
@@ -306,27 +346,24 @@ const Dashboard: React.FC = () => {
       {/* DETAIL MODAL */}
       {selectedIPO && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-           {/* Backdrop */}
            <div 
              className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
              onClick={() => setSelectedIPO(null)}
            ></div>
 
-           {/* Content */}
            <div className="bg-white dark:bg-charcoal w-full max-w-2xl rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col max-h-[90vh] animate-fadeInUp">
               
-              {/* Modal Header */}
               <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex justify-between items-start bg-gray-50 dark:bg-[#151515]">
                  <div>
                     <h3 className="text-2xl font-black text-gray-900 dark:text-white leading-tight">
-                       {selectedIPO.companyName}
+                       {safeRender(selectedIPO?.companyName)}
                     </h3>
                     <div className="flex items-center gap-2 mt-2">
                        <span className="px-2 py-1 rounded-md bg-white dark:bg-charcoal text-xs font-bold border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300">
-                         {selectedIPO.type}
+                         {safeRender(selectedIPO?.type)}
                        </span>
-                       <span className={`px-2 py-1 rounded-md text-xs font-bold ${selectedIPO.status === 'Closed' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                         {selectedIPO.status}
+                       <span className={`px-2 py-1 rounded-md text-xs font-bold ${selectedIPO?.status === 'Closed' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                         {safeRender(selectedIPO?.status)}
                        </span>
                     </div>
                  </div>
@@ -338,30 +375,28 @@ const Dashboard: React.FC = () => {
                  </button>
               </div>
 
-              {/* Modal Body - Scrollable */}
               <div className="p-6 overflow-y-auto">
-                 
-                 {/* Financials Grid */}
                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
                     <div className="bg-gray-50 dark:bg-charcoal-light p-3 rounded-xl border border-gray-100 dark:border-gray-800">
                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Price</p>
-                       <p className="font-bold text-gray-900 dark:text-white">{selectedIPO.priceBand}</p>
+                       <p className="font-bold text-gray-900 dark:text-white">{safeRender(selectedIPO?.priceBand)}</p>
                     </div>
                     <div className="bg-gray-50 dark:bg-charcoal-light p-3 rounded-xl border border-gray-100 dark:border-gray-800">
                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Lot Size</p>
-                       <p className="font-bold text-gray-900 dark:text-white">{selectedIPO.lotSize}</p>
+                       <p className="font-bold text-gray-900 dark:text-white">{safeRender(selectedIPO?.lotSize)}</p>
                     </div>
                     <div className="bg-gray-50 dark:bg-charcoal-light p-3 rounded-xl border border-gray-100 dark:border-gray-800">
                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Issue Size</p>
-                       <p className="font-bold text-gray-900 dark:text-white">{selectedIPO.issueSize}</p>
+                       <p className="font-bold text-gray-900 dark:text-white">{safeRender(selectedIPO?.issueSize)}</p>
                     </div>
                     <div className="bg-gray-50 dark:bg-charcoal-light p-3 rounded-xl border border-gray-100 dark:border-gray-800">
-                       <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">{selectedIPO.status === 'Closed' ? 'Listed On' : 'Closes'}</p>
-                       <p className="font-bold text-gray-900 dark:text-white">{selectedIPO.status === 'Closed' ? selectedIPO.listingDate : selectedIPO.closeDate}</p>
+                       <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">{selectedIPO?.status === 'Closed' ? 'Listed On' : 'Closes'}</p>
+                       <p className="font-bold text-gray-900 dark:text-white">
+                         {selectedIPO?.status === 'Closed' ? safeRender(selectedIPO?.listingDate) : safeRender(selectedIPO?.closeDate)}
+                       </p>
                     </div>
                  </div>
 
-                 {/* Subscription Section */}
                  <div className="mb-8">
                     <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider mb-4 flex items-center gap-2">
                        <Users size={16} className="text-primary" /> Subscription Status
@@ -369,20 +404,25 @@ const Dashboard: React.FC = () => {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         <div className="flex justify-between items-center p-4 rounded-xl bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/20">
                            <span className="text-sm font-semibold text-blue-800 dark:text-blue-300">Retail</span>
-                           <span className="text-lg font-black text-blue-800 dark:text-blue-300">{selectedIPO.subscription.retail}</span>
+                           <span className="text-lg font-black text-blue-800 dark:text-blue-300">
+                             {selectedIPO?.subscription ? safeRender(selectedIPO.subscription.retail) : 'N/A'}
+                           </span>
                         </div>
                         <div className="flex justify-between items-center p-4 rounded-xl bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/20">
                            <span className="text-sm font-semibold text-blue-800 dark:text-blue-300">NII (HNI)</span>
-                           <span className="text-lg font-black text-blue-800 dark:text-blue-300">{selectedIPO.subscription.nii}</span>
+                           <span className="text-lg font-black text-blue-800 dark:text-blue-300">
+                             {selectedIPO?.subscription ? safeRender(selectedIPO.subscription.nii) : 'N/A'}
+                           </span>
                         </div>
                         <div className="flex justify-between items-center p-4 rounded-xl bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/20">
                            <span className="text-sm font-semibold text-blue-800 dark:text-blue-300">QIB</span>
-                           <span className="text-lg font-black text-blue-800 dark:text-blue-300">{selectedIPO.subscription.qib}</span>
+                           <span className="text-lg font-black text-blue-800 dark:text-blue-300">
+                             {selectedIPO?.subscription ? safeRender(selectedIPO.subscription.qib) : 'N/A'}
+                           </span>
                         </div>
                     </div>
                  </div>
 
-                 {/* Additional Details: Registrar & Manager */}
                  <div>
                     <h4 className="text-sm font-bold text-gray-900 dark:text-white uppercase tracking-wider mb-4 flex items-center gap-2">
                        <Briefcase size={16} className="text-primary" /> Issue Management
@@ -394,7 +434,9 @@ const Dashboard: React.FC = () => {
                           </div>
                           <div>
                              <p className="text-xs font-bold text-gray-500 uppercase">Registrar</p>
-                             <p className="text-base font-semibold text-gray-900 dark:text-white">{selectedIPO.registrar || "Link Intime India Pvt Ltd"}</p>
+                             <p className="text-base font-semibold text-gray-900 dark:text-white">
+                               {safeRender(selectedIPO?.registrar) || "Link Intime India Pvt Ltd"}
+                             </p>
                              <p className="text-xs text-gray-400 mt-1">Check allotment status on their website.</p>
                           </div>
                        </div>
@@ -405,14 +447,15 @@ const Dashboard: React.FC = () => {
                           </div>
                           <div>
                              <p className="text-xs font-bold text-gray-500 uppercase">Lead Manager</p>
-                             <p className="text-base font-semibold text-gray-900 dark:text-white">{selectedIPO.leadManager || "Not Disclosed"}</p>
+                             <p className="text-base font-semibold text-gray-900 dark:text-white">
+                               {safeRender(selectedIPO?.leadManager) || "Not Disclosed"}
+                             </p>
                           </div>
                        </div>
                     </div>
                  </div>
               </div>
 
-              {/* Modal Footer */}
               <div className="p-4 border-t border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-[#151515] flex justify-end">
                  <button 
                    onClick={() => setSelectedIPO(null)}
